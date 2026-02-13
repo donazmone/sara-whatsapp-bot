@@ -1,132 +1,112 @@
-const express = require("express");
-const axios = require("axios");
+import express from "express";
+import axios from "axios";
+import stringSimilarity from "string-similarity";
+import { google } from "googleapis";
 
 const app = express();
 app.use(express.json());
 
-/* ================= ENV ================= */
-
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const DOCTOR_NUMBER = process.env.DOCTOR_NUMBER;
 
-/* ================= HELPERS ================= */
+const creds = JSON.parse(process.env.GOOGLE_CREDS);
 
-async function sendText(to, body) {
-    try {
-        await axios.post(
-            `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
-            {
-                messaging_product: "whatsapp",
-                to,
-                type: "text",
-                text: { body }
-            },
-            {
-                headers: {
-                    Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-                    "Content-Type": "application/json"
-                }
-            }
-        );
-    } catch (err) {
-        console.error("SEND ERROR:", err.response?.data || err.message);
+const auth = new google.auth.GoogleAuth({
+  credentials: creds,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+const sheets = google.sheets({ version: "v4", auth });
+
+const SHEET_ID = "1hI5My8jrH-4W8dX7UCaWCFCjImevDjfoQ-0N0cfRBSk";
+
+async function sendMessage(to, text) {
+  await axios.post(
+    `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to,
+      text: { body: text },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
     }
+  );
 }
+
+const INTENTS = {
+  greeting: ["مساء الخير", "صباح الخير", "السلام", "هاي"],
+  booking: ["معاد", "ميعاد", "احجز", "عايز معاد"],
+};
 
 function detectIntent(text) {
-    text = text.toLowerCase();
+  let bestMatch = { rating: 0, intent: null };
 
-    if (text.includes("حجز") || text.includes("ميعاد") || text.includes("موعد"))
-        return "booking";
+  for (const intent in INTENTS) {
+    const match = stringSimilarity.findBestMatch(text, INTENTS[intent]);
+    if (match.bestMatch.rating > bestMatch.rating) {
+      bestMatch = {
+        rating: match.bestMatch.rating,
+        intent,
+      };
+    }
+  }
 
-    if (text.includes("تعديل") || text.includes("تأجيل") || text.includes("تغيير"))
-        return "reschedule";
+  if (bestMatch.rating < 0.35) return "unknown";
 
-    if (text.includes("متابعة"))
-        return "followup";
-
-    if (text.includes("ألم") || text.includes("وجع") || text.includes("طارئ"))
-        return "urgent";
-
-    return "unknown";
+  return bestMatch.intent;
 }
 
-/* ================= WEBHOOK VERIFY ================= */
+function reply(intent) {
+  switch (intent) {
+    case "greeting":
+      return "مساء النور 🌸 تحت أمرك";
+
+    case "booking":
+      return "تمام 👍 تحب أنهي يوم؟";
+
+    default:
+      return "ممكن توضّحلي أكتر؟ 😊";
+  }
+}
 
 app.get("/webhook", (req, res) => {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
 
-    if (mode && token === VERIFY_TOKEN) {
-        return res.status(200).send(challenge);
-    }
-
+  if (mode && token === VERIFY_TOKEN) {
+    res.status(200).send(challenge);
+  } else {
     res.sendStatus(403);
+  }
 });
-
-/* ================= WEBHOOK RECEIVE ================= */
 
 app.post("/webhook", async (req, res) => {
-    try {
-        const entry = req.body.entry?.[0];
-        const changes = entry?.changes?.[0];
-        const value = changes?.value;
-        const message = value?.messages?.[0];
+  try {
+    const msg =
+      req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-        if (!message) return res.sendStatus(200);
+    if (!msg) return res.sendStatus(200);
 
-        const from = message.from;
-        const text = message.text?.body;
+    const from = msg.from;
+    const text = msg.text?.body;
 
-        if (!text) return res.sendStatus(200);
+    if (!text) return res.sendStatus(200);
 
-        console.log("INCOMING:", text);
+    const intent = detectIntent(text);
 
-        const intent = detectIntent(text);
+    await sendMessage(from, reply(intent));
 
-        let reply;
-
-        switch (intent) {
-            case "booking":
-                reply = "تمام يا فندم ✅ تحب أحجز لحضرتك في أنهي عيادة؟";
-                break;
-
-            case "reschedule":
-                reply = "حاضر يا فندم 👌 ابعتلي اسم العيادة والميعاد القديم.";
-                break;
-
-            case "followup":
-                reply = "تمام ✅ ابعتلي اسم العيادة عشان أشوف أقرب متابعة.";
-                break;
-
-            case "urgent":
-                reply = "ثانية واحدة يا فندم ⚠️ هبلغ الدكتور حالًا.";
-                await sendText(DOCTOR_NUMBER, `⚠️ حالة طارئة من رقم ${from}\n\n${text}`);
-                break;
-
-            default:
-                reply = "تمام يا فندم ✅ تحت أمرك.";
-        }
-
-        await sendText(from, reply);
-
-        res.sendStatus(200);
-    } catch (err) {
-        console.error("WEBHOOK ERROR:", err.message);
-        res.sendStatus(200);
-    }
+    res.sendStatus(200);
+  } catch (err) {
+    console.log(err.message);
+    res.sendStatus(200);
+  }
 });
 
-/* ================= ROOT ================= */
-
-app.get("/", (req, res) => {
-    res.send("Sara is running");
-});
-
-/* ================= START ================= */
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on", PORT));
+app.listen(3000, () => console.log("Sara running"));

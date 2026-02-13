@@ -1,14 +1,14 @@
 {
-  "name": "sara-bot",
+  "name": "sara-whatsapp-bot",
   "version": "1.0.0",
-  "main": "service.js",
+  "description": "Sara AI WhatsApp Bot",
+  "main": "server.js",
   "scripts": {
-    "start": "node service.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "axios": "^1.6.0",
-    "googleapis": "^133.0.0",
-    "string-similarity": "^4.0.4"
+    "dotenv": "^16.4.0"
   }
 }

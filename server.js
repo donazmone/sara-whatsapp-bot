@@ -1,112 +1,60 @@
 import express from "express";
-import axios from "axios";
-import stringSimilarity from "string-similarity";
-import { google } from "googleapis";
+import fetch from "node-fetch";
 
 const app = express();
 app.use(express.json());
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const OPENAI_KEY = process.env.OPENAI_KEY;
 
-const creds = JSON.parse(process.env.GOOGLE_CREDS);
-
-const auth = new google.auth.GoogleAuth({
-  credentials: creds,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-});
-
-const sheets = google.sheets({ version: "v4", auth });
-
-const SHEET_ID = "1hI5My8jrH-4W8dX7UCaWCFCjImevDjfoQ-0N0cfRBSk";
-
-async function sendMessage(to, text) {
-  await axios.post(
-    `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to,
-      text: { body: text },
+async function askAI(message) {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENAI_KEY}`,
+      "Content-Type": "application/json",
     },
-    {
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "أنتِ سكرتيرة مواعيد مصرية اسمها سارة. أسلوبك بسيط، ودود، طبيعي جدًا. ردودك قصيرة ومش رسمية. لا تكرري الكلام.",
+        },
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+    }),
+  });
+
+  const data = await response.json();
+  return data.choices[0].message.content;
 }
-
-const INTENTS = {
-  greeting: ["مساء الخير", "صباح الخير", "السلام", "هاي"],
-  booking: ["معاد", "ميعاد", "احجز", "عايز معاد"],
-};
-
-function detectIntent(text) {
-  let bestMatch = { rating: 0, intent: null };
-
-  for (const intent in INTENTS) {
-    const match = stringSimilarity.findBestMatch(text, INTENTS[intent]);
-    if (match.bestMatch.rating > bestMatch.rating) {
-      bestMatch = {
-        rating: match.bestMatch.rating,
-        intent,
-      };
-    }
-  }
-
-  if (bestMatch.rating < 0.35) return "unknown";
-
-  return bestMatch.intent;
-}
-
-function reply(intent) {
-  switch (intent) {
-    case "greeting":
-      return "مساء النور 🌸 تحت أمرك";
-
-    case "booking":
-      return "تمام 👍 تحب أنهي يوم؟";
-
-    default:
-      return "ممكن توضّحلي أكتر؟ 😊";
-  }
-}
-
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode && token === VERIFY_TOKEN) {
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
 
 app.post("/webhook", async (req, res) => {
   try {
-    const msg =
-      req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    const incomingMessage =
+      req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body;
 
-    if (!msg) return res.sendStatus(200);
+    if (!incomingMessage) return res.sendStatus(200);
 
-    const from = msg.from;
-    const text = msg.text?.body;
+    const reply = await askAI(incomingMessage);
 
-    if (!text) return res.sendStatus(200);
-
-    const intent = detectIntent(text);
-
-    await sendMessage(from, reply(intent));
+    console.log("User:", incomingMessage);
+    console.log("Sara:", reply);
 
     res.sendStatus(200);
   } catch (err) {
-    console.log(err.message);
+    console.log(err);
     res.sendStatus(200);
   }
 });
 
-app.listen(3000, () => console.log("Sara running"));
+app.get("/", (req, res) => {
+  res.send("Sara server running");
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("Server running"));

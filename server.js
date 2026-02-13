@@ -1,125 +1,155 @@
 const express = require("express");
 const axios = require("axios");
-const OpenAI = require("openai");
+require("dotenv").config();
 
 const app = express();
 app.use(express.json());
-
-/* ================= CONFIG ================= */
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+/* =========================
+   Clinic Mapping
+========================= */
 
-/* ================= AI BRAIN ================= */
+const clinics = {
+  "التجمع الخامس": { type: "redirect", phone: "PerlaDent" },
+  "المقطم": { type: "redirect", phone: "Smile" },
+  "حدائق اكتوبر": { type: "redirect", phone: "Paradise" },
+  "السلام": { type: "redirect", phone: "Elsalam" },
+  "كرداسة": { type: "redirect", phone: "Kerdasa" },
+  "مدينة نصر": { type: "redirect", phone: "Alaa Eldeen" },
+  "شيراتون": { type: "redirect", phone: "Cornerstone" },
+  "المنيل عيادة سرور": { type: "redirect", phone: "SDC" },
+  "عيادة دكتور بنداري المنيل": { type: "bandari" }
+};
 
-async function generateAIReply(message) {
-  try {
-    const response = await openai.responses.create({
-      model: "gpt-5-2",
-      input: `أنتِ سكرتيرة عيادة تقويم أسنان في مصر. اسمك سارة.
+/* =========================
+   Helper Functions
+========================= */
 
-أسلوبك:
-- مصرية طبيعية جدًا
-- ودودة وبشرية
-- مختصرة
-- غير رسمية
-- غير روبوتية
-- تفهمي الأخطاء الإملائية
-
-رسالة المريض:
-"${message}"
-
-ردي بشكل بشري طبيعي جدًا.`
-    });
-
-    return response.output[0].content[0].text;
-
-  } catch (err) {
-    console.log("AI Error:", err.message);
-    return "معلش حصل مشكلة بسيطة، ابعتلي تاني 🙏";
-  }
-}
-
-/* ================= SEND WHATSAPP ================= */
-
-async function sendWhatsAppMessage(to, text) {
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: to,
-        text: { body: text }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json"
-        }
+async function askOpenAI(message) {
+  const response = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `
+أنت سكرتيرة ذكية اسمها سارة.
+تتكلمي مصري طبيعي.
+ردود قصيرة.
+هدفك تفهمي المريض وتساعديه يحجز.
+لو مش محدد عيادة اسأليه يحب يحجز في أنهي عيادة.
+`
+        },
+        { role: "user", content: message }
+      ]
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`
       }
-    );
-  } catch (err) {
-    console.log("WhatsApp Send Error:", err.message);
-  }
+    }
+  );
+
+  return response.data.choices[0].message.content;
 }
 
-/* ================= WEBHOOK VERIFY ================= */
+async function sendWhatsApp(to, text) {
+  await axios.post(
+    `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to,
+      text: { body: text }
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`
+      }
+    }
+  );
+}
+
+/* =========================
+   Webhook Verification
+========================= */
 
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("Webhook verified");
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
+  if (mode && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
   }
+
+  res.sendStatus(403);
 });
 
-/* ================= WEBHOOK RECEIVE ================= */
+/* =========================
+   Incoming Messages
+========================= */
 
 app.post("/webhook", async (req, res) => {
   try {
     const entry = req.body.entry?.[0];
     const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const message = value?.messages?.[0];
+    const message = changes?.value?.messages?.[0];
 
-    if (!message) {
-      return res.sendStatus(200);
-    }
+    if (!message) return res.sendStatus(200);
 
     const from = message.from;
     const text = message.text?.body;
 
-    if (!text) {
+    if (!text) return res.sendStatus(200);
+
+    console.log("Message:", text);
+
+    /* ===== Clinic Detection ===== */
+
+    const matchedClinic = Object.keys(clinics).find(c =>
+      text.includes(c)
+    );
+
+    if (matchedClinic) {
+      const clinic = clinics[matchedClinic];
+
+      if (clinic.type === "redirect") {
+        await sendWhatsApp(
+          from,
+          `تمام 👍 تواصلي مع سكرتارية الفرع ده:\n${clinic.phone}`
+        );
+      } else {
+        await sendWhatsApp(
+          from,
+          "تمام 👍 أقرب ميعاد متاح لبنداري بكرة الساعة 5"
+        );
+      }
+
       return res.sendStatus(200);
     }
 
-    console.log("Incoming:", text);
+    /* ===== No Clinic → AI Brain ===== */
 
-    const reply = await generateAIReply(text);
+    const aiReply = await askOpenAI(text);
 
-    await sendWhatsAppMessage(from, reply);
+    await sendWhatsApp(from, aiReply);
 
     res.sendStatus(200);
-
   } catch (err) {
-    console.log("Webhook Error:", err.message);
+    console.error(err.response?.data || err.message);
     res.sendStatus(200);
   }
 });
 
-/* ================= START SERVER ================= */
+/* ========================= */
 
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log("Server running");
+  console.log("Sara running...");
 });

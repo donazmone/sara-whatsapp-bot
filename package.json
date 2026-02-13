@@ -1,11 +1,8 @@
 {
-  "name": "sara-bot",
+  "name": "sara-whatsapp-bot",
   "version": "1.0.0",
   "main": "server.js",
   "type": "commonjs",
-  "scripts": {
-    "start": "node server.js"
-  },
   "dependencies": {
     "express": "^4.18.2",
     "node-fetch": "^2.6.7",

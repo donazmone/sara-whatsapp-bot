@@ -1,6 +1,5 @@
-import express from "express";
-import fetch from "node-fetch";
-import OpenAI from "openai";
+const express = require("express");
+const OpenAI = require("openai");
 
 const app = express();
 app.use(express.json());
@@ -9,52 +8,29 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-/* ===== Memory Store ===== */
-/* لكل مريض نحفظ آخر محادثة */
-const conversations = new Map();
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
-function getHistory(user) {
-  if (!conversations.has(user)) {
-    conversations.set(user, []);
-  }
-  return conversations.get(user);
-}
-
-function pushMessage(user, role, content) {
-  const history = getHistory(user);
-  history.push({ role, content });
-
-  /* نحدد حد أقصى للذاكرة */
-  if (history.length > 20) {
-    history.shift();
-  }
-}
-
-/* ===== Health Check ===== */
-app.get("/", (req, res) => {
-  res.send("Sara AI Brain Running");
-});
-
-/* ===== Webhook Verification ===== */
+/* ===== Verify Webhook ===== */
 app.get("/webhook", (req, res) => {
-  const verify_token = process.env.VERIFY_TOKEN;
-
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode && token === verify_token) {
+  if (mode && token === VERIFY_TOKEN) {
     return res.status(200).send(challenge);
   }
 
-  res.sendStatus(403);
+  return res.sendStatus(403);
 });
 
-/* ===== Incoming WhatsApp Messages ===== */
+/* ===== Incoming Messages ===== */
 app.post("/webhook", async (req, res) => {
   try {
-    const message =
-      req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const message = changes?.value?.messages?.[0];
 
     if (!message) return res.sendStatus(200);
 
@@ -63,66 +39,101 @@ app.post("/webhook", async (req, res) => {
 
     if (!text) return res.sendStatus(200);
 
-    console.log("Incoming:", from, text);
+    console.log("Incoming:", text);
 
-    /* نحفظ رسالة المريض */
-    pushMessage(from, "user", text);
-
-    const history = getHistory(from);
-
+    /* ===== AI Brain ===== */
     const completion = await client.chat.completions.create({
-      model: "gpt-5-mini",
+      model: "gpt-5-2",
       messages: [
         {
           role: "system",
           content: `
 اسمك سارة.
-سكرتيرة عيادات أسنان في مصر.
-شخصيتك بشرية جداً، مصرية طبيعية.
-ردود قصيرة جداً.
-ودودة، هادئة، مش رسمية.
-لا تشرحي كثيراً.
-لا تسألي نفس السؤال مرتين.
-افهمي سياق الكلام السابق.
-لو المريض يسأل عن سعر → ردي بشكل منطقي.
-لو حجز → ساعديه.
-لو لخبط → صححي بهدوء.
-          `,
+
+أنتِ سكرتيرة خاصة لدكتور تقويم أسنان في مصر.
+وظيفتك تنظيم المواعيد والرد على المرضى فقط.
+
+أسلوبك:
+- كلام مصري طبيعي جداً
+- ردود قصيرة جداً
+- هادئة وبشرية
+- لا تكتبي رسائل طويلة
+- لا تسألي أكثر من سؤال واحد في الرسالة
+- لا تشرحي كثيراً
+- لا تعرضي خدمات طبية
+- لا تتحدثي كعيادة عامة
+
+طريقة التعامل:
+
+لو المريض يريد حجز:
+→ اسألي سؤال واحد فقط لتحديد الفرع
+
+الفروع المتاحة:
+التجمع الخامس
+المقطم
+حدائق أكتوبر
+السلام
+كرداسة
+المنيل
+مدينة نصر
+شيراتون
+عيادة دكتور بنداري المنيل
+
+بعد اختيار الفرع:
+
+- أي فرع غير بنداري → أعطي رقم السكرتيرة فقط
+- بنداري → كمّلي حجز
+
+لو المريض يسأل عن السعر:
+→ اسأليه في أنهي فرع أولاً
+
+ممنوع:
+- الأسئلة الكثيرة
+- القوائم الطويلة
+- الكلام الطبي
+- الردود الرسمية
+`
         },
-        ...history,
+        {
+          role: "user",
+          content: text,
+        },
       ],
     });
 
     const reply = completion.choices[0].message.content;
 
-    /* نحفظ رد سارة */
-    pushMessage(from, "assistant", reply);
+    console.log("Sara:", reply);
 
+    /* ===== Send WhatsApp Reply ===== */
     await fetch(
-      `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           messaging_product: "whatsapp",
           to: from,
+          type: "text",
           text: { body: reply },
         }),
       }
     );
 
     res.sendStatus(200);
-  } catch (err) {
-    console.error("ERROR:", err);
+  } catch (error) {
+    console.log("ERROR:", error.response?.data || error.message);
     res.sendStatus(200);
   }
 });
 
-const PORT = process.env.PORT || 10000;
-
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+/* ===== Health Check ===== */
+app.get("/", (req, res) => {
+  res.send("Sara server running");
 });
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log("Server running on port", PORT));

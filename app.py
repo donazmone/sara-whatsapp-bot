@@ -8,7 +8,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from openai import OpenAI
 
-VERIFY_TOKEN   = os.environ.get("WA_VERIFY_TOKEN", "sara_secret_2024")
+VERIFY_TOKEN   = os.environ.get("WA_VERIFY_TOKEN", "sara_secret_2024y")
 WA_TOKEN       = os.environ.get("WA_TOKEN", "")
 WA_PHONE_ID    = os.environ.get("WA_PHONE_ID", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
